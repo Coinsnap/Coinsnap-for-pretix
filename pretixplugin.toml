@@ -1,0 +1,5 @@
+[plugin]
+package = "coinsnap"
+modules = [ "coinsnap" ]
+marketplace_name = "coinsnap"
+

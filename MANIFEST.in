@@ -1,0 +1,5 @@
+recursive-include coinsnap/static *
+recursive-include coinsnap/templates *
+recursive-include coinsnap/locale *
+include LICENSE
+exclude .gitlab-ci.yml

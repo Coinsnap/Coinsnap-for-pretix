@@ -1,0 +1,42 @@
+[project]
+name = "coinsnap"
+dynamic = ["version"]
+description = "Coinsnap plugin"
+readme = "README.rst"
+license = {text = "Apache"}
+keywords = ["pretix"]
+authors = [
+    {name = "Z3R0", email = "your-email@example.org"},
+]
+maintainers = [
+    {name = "Z3R0", email = "your-email@example.org"},
+]
+
+dependencies = [
+]
+
+[project.entry-points."pretix.plugin"]
+coinsnap = "coinsnap:PretixPluginMeta"
+
+[project.entry-points."distutils.commands"]
+build = "pretix_plugin_build.build:CustomBuild"
+
+[build-system]
+requires = [
+    "setuptools",
+    "pretix-plugin-build",
+]
+
+[project.urls]
+homepage = "GitHub repository URL"
+repository = "GitHub repository URL"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.dynamic]
+version = {attr = "coinsnap.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["pretix*", "src"]
+namespaces = false

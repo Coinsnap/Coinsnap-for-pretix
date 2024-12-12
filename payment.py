@@ -167,11 +167,12 @@ class CoinsnapPayment(BasePaymentProvider):
         }
 
         try:
+            CoinsnapWebhookState.set_secret(secret)
+
             response = requests.post(url, json=payload, headers=headers)
             response.raise_for_status()
             logger.info("Webhook registered successfully.")
 
-            CoinsnapWebhookState.set_secret(secret)
             CoinsnapWebhookState.set(True)
             return True
         except requests.exceptions.RequestException as e:

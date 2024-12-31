@@ -29,7 +29,7 @@ class CoinsnapPayment(BasePaymentProvider):
         for setting in self.COINSNAP_SETTINGS:
             fields[setting] = forms.CharField(
                 label=setting.replace("_", " ").title(),
-                required=True,
+                required=setting != "custom_domain",
                 widget=forms.TextInput(attrs={"placeholder": f"Enter {setting}"}),
             )
         return fields

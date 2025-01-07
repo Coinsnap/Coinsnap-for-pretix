@@ -1,5 +1,5 @@
 # Coinsnap for Pretix payment plugin #
-![Image of Coinsnap for pretix](https://resources.coinsnap.org/products/pretix/images/cover.png)
+![Coinsnap for Pretix](https://resources.coinsnap.org/products/pretix/images/cover.png)
 
 ## Accept Bitcoin and Lightning Payments with Coinsnap in Pretix ##
 
@@ -13,6 +13,8 @@
 The Coinsnap Pretix plugin allows you to accept Bitcoin Lightning payments in Pretix ticket store.
 
 ## Description ##
+
+![Pretix ticket sale system](https://resources.coinsnap.org/products/pretix/images/screenshot-pretix.png)
 
 * Coinsnap Pretix Demo Site: https://pretix.coinsnap.net/
 * Blog Article: https://coinsnap.io/en/coinsnap-for-pretix/

@@ -146,6 +146,30 @@ After saving settings you can use Store ID and Api Key on the step 2.
 
 ### 4. Test Coinsnap payment for ticket in Pretix ###
 
-Go to shop add ticket to cart and select Bitcoin-Lightning payment as payment method. After clicking Place binding order you should be redirected to QR for payment.
+Every event has its own URL, user can choose needed options and order tickets according to the event settings. 
+
+4.1. Go to event URL, which you can find on event page in Backend.
+
+![Event page](https://resources.coinsnap.org/products/pretix/images/screenshot-11.png)
+
+4.2. Choose needed event options and add ticket to cart.
+
+![Shopping cart](https://resources.coinsnap.org/products/pretix/images/screenshot-12.png)
+
+4.3. Go to checkout. Add your contact data and continue.
+
+![Add your contact data](https://resources.coinsnap.org/products/pretix/images/screenshot-13.png)
+
+4.4. Select Bitcoin-Lightning payment as payment method and continue. 
+
+![Select Bitcoin-Lightning payment](https://resources.coinsnap.org/products/pretix/images/screenshot-14.png)
+
+4.5. Review order and click `Place binding order`.
+
+![Order review](https://resources.coinsnap.org/products/pretix/images/screenshot-15.png)
+
+4.6. You'll see QR code for payment. Hold your wallet above it and the amount of SATS displayed above will be transferred from your wallet to the Coinsnap wallet as soon as you click the button “pay”.
+
+![QR code for payment](https://resources.coinsnap.org/products/pretix/images/screenshot-16.png)
 
 

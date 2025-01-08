@@ -126,6 +126,8 @@ Default credentials are:
 
 ![Payment Settings](https://resources.coinsnap.org/products/pretix/images/screenshot-5.png)
 
+![Available plugins](https://resources.coinsnap.org/products/pretix/images/screenshot-6.png)
+
 
 ### 3. Create Coinsnap account ####
 

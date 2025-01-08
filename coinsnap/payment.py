@@ -20,7 +20,7 @@ class CoinsnapPayment(BasePaymentProvider):
     identifier = "coinsnap"
     verbose_name = _("Bitcoin-Lightning payment")
     BASE_API_URL = "https://app.coinsnap.io/api/v1/stores"
-    COINSNAP_SETTINGS = ["store_id", "api_key","custom_domain"]
+    COINSNAP_SETTINGS = ["store_id", "api_key"]
     WEBHOOK_EVENTS = ["New", "Expired", "Settled", "Processing"]
 
     @property
@@ -29,7 +29,7 @@ class CoinsnapPayment(BasePaymentProvider):
         for setting in self.COINSNAP_SETTINGS:
             fields[setting] = forms.CharField(
                 label=setting.replace("_", " ").title(),
-                required=setting != "custom_domain",
+                required=True,
                 widget=forms.TextInput(attrs={"placeholder": f"Enter {setting}"}),
             )
         return fields
@@ -141,16 +141,28 @@ class CoinsnapPayment(BasePaymentProvider):
             bool: Whether webhook registration was successful
 
         """
-        store_id, api_key, custom_domain = self.settings.get("store_id"), self.settings.get("api_key"), self.settings.get("custom_domain")
-        domain = custom_domain or domain
+        store_id, api_key = self.settings.get("store_id"), self.settings.get("api_key")
 
         CoinsnapWebhookState.objects.get_or_create(key='webhook_connection', defaults={'is_connected_to_webhook': False})
         
         if force:
             CoinsnapWebhookState.set(False)
 
-        if CoinsnapWebhookState.get():
-            return True
+        if CoinsnapWebhookState.get(): #If webhook is saved check if it is still valid and reset if not
+            webhook_id = CoinsnapWebhookState.get_webhook_id()
+            headers = {
+                "x-api-key": api_key,
+                "Content-Type": "application/json",
+            }
+            url = f'https://app.coinsnap.io/api/v1/stores/{store_id}/webhooks/{webhook_id}'
+            response = requests.get(
+                url,
+                headers=headers
+            )
+            if response.status_code == 200:
+                return True
+            else: 
+                CoinsnapWebhookState.set(False)
         
         characters = string.ascii_letters + string.digits
         secret = ''.join(secrets.choice(characters) for _ in range(32))
@@ -174,6 +186,10 @@ class CoinsnapPayment(BasePaymentProvider):
             logger.info("Webhook registered successfully.")
 
             CoinsnapWebhookState.set(True)
+
+            webhook_id = response.json().get('id')
+            CoinsnapWebhookState.set_webhook_id(webhook_id)
+
             return True
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to register webhook: {e}")
@@ -200,9 +216,6 @@ class CoinsnapPayment(BasePaymentProvider):
                 },
             )
         )
-        custom_domain = self.settings.get("custom_domain")
-        if(custom_domain):
-            redirect_url = re.sub(r'https?://[^/]+', custom_domain, redirect_url)
 
         self.create_coinsnap_invoice(
             request,

@@ -20,7 +20,7 @@ class CoinsnapPayment(BasePaymentProvider):
     identifier = "coinsnap"
     verbose_name = _("Bitcoin-Lightning payment")
     BASE_API_URL = "https://app.coinsnap.io/api/v1/stores"
-    COINSNAP_SETTINGS = ["store_id", "api_key","custom_domain"]
+    COINSNAP_SETTINGS = ["store_id", "api_key"]
     WEBHOOK_EVENTS = ["New", "Expired", "Settled", "Processing"]
 
     @property
@@ -29,7 +29,7 @@ class CoinsnapPayment(BasePaymentProvider):
         for setting in self.COINSNAP_SETTINGS:
             fields[setting] = forms.CharField(
                 label=setting.replace("_", " ").title(),
-                required=setting != "custom_domain",
+                required=True,
                 widget=forms.TextInput(attrs={"placeholder": f"Enter {setting}"}),
             )
         return fields
@@ -141,8 +141,7 @@ class CoinsnapPayment(BasePaymentProvider):
             bool: Whether webhook registration was successful
 
         """
-        store_id, api_key, custom_domain = self.settings.get("store_id"), self.settings.get("api_key"), self.settings.get("custom_domain")
-        domain = custom_domain or domain
+        store_id, api_key = self.settings.get("store_id"), self.settings.get("api_key")
 
         CoinsnapWebhookState.objects.get_or_create(key='webhook_connection', defaults={'is_connected_to_webhook': False})
         
@@ -200,9 +199,6 @@ class CoinsnapPayment(BasePaymentProvider):
                 },
             )
         )
-        custom_domain = self.settings.get("custom_domain")
-        if(custom_domain):
-            redirect_url = re.sub(r'https?://[^/]+', custom_domain, redirect_url)
 
         self.create_coinsnap_invoice(
             request,

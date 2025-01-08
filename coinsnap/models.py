@@ -12,7 +12,8 @@ from django.db import models
 class CoinsnapWebhookState(models.Model):
     key = models.CharField(max_length=255, unique=True)
     is_connected_to_webhook = models.BooleanField(default=False)
-    secret = models.CharField(max_length=255, blank=True, null=True)  # New field
+    secret = models.CharField(max_length=255, blank=True, null=True)
+    webhook_id = models.CharField(max_length=255, blank=True, null=True)
 
     @classmethod
     def get(cls):
@@ -42,4 +43,19 @@ class CoinsnapWebhookState(models.Model):
         """Update the secret."""
         state, created = cls.objects.get_or_create(key='webhook_connection')
         state.secret = value
+        state.save()
+
+    @classmethod
+    def get_webhook_id(cls):
+        """Fetch the webhook_id."""
+        try:
+            return cls.objects.get(key='webhook_connection').webhook_id
+        except cls.DoesNotExist:
+            return None
+
+    @classmethod
+    def set_webhook_id(cls, value):
+        """Update the webhook_id."""
+        state, created = cls.objects.get_or_create(key='webhook_connection')
+        state.webhook_id = value
         state.save()

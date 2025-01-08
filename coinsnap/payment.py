@@ -148,8 +148,21 @@ class CoinsnapPayment(BasePaymentProvider):
         if force:
             CoinsnapWebhookState.set(False)
 
-        if CoinsnapWebhookState.get():
-            return True
+        if CoinsnapWebhookState.get(): #If webhook is saved check if it is still valid and reset if not
+            webhook_id = CoinsnapWebhookState.get_webhook_id()
+            headers = {
+                "x-api-key": api_key,
+                "Content-Type": "application/json",
+            }
+            url = f'https://app.coinsnap.io/api/v1/stores/{store_id}/webhooks/{webhook_id}'
+            response = requests.get(
+                url,
+                headers=headers
+            )
+            if response.status_code == 200:
+                return True
+            else: 
+                CoinsnapWebhookState.set(False)
         
         characters = string.ascii_letters + string.digits
         secret = ''.join(secrets.choice(characters) for _ in range(32))
@@ -173,6 +186,10 @@ class CoinsnapPayment(BasePaymentProvider):
             logger.info("Webhook registered successfully.")
 
             CoinsnapWebhookState.set(True)
+
+            webhook_id = response.json().get('id')
+            CoinsnapWebhookState.set_webhook_id(webhook_id)
+
             return True
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to register webhook: {e}")

@@ -16,13 +16,17 @@ The Coinsnap Pretix plugin allows you to accept Bitcoin Lightning payments in Pr
 
 ![Pretix ticket sale system](https://resources.coinsnap.org/products/pretix/images/screenshot-pretix.png)
 
+Pretix is a ticketing software that is all-in-one: Online shop, box office and ticket outlets with focus on privacy and security. Pretix offers full multi-language capabilities, is highly adaptable to any type of event and extensible with plug-ins and through a REST API. Pretix software can be used for sport events, conferences, festivals, concerts, shows, exhibitions, workshops, etc. all around the world.
+
 * Coinsnap Pretix Demo Site: https://pretix.coinsnap.net/
 * Blog Article: https://coinsnap.io/en/coinsnap-for-pretix/
 * GitHub: https://github.com/Coinsnap/Coinsnap-for-pretix
 
 ## Bitcoin and Lightning payments in Pretix ##
 
+With the Coinsnap Bitcoin Lightning payment processing plugin you can immediately accept Bitcoin Lightning payments on your site. You don’t need your own Lightning node or any other technical requirements if you'd like to provide payments via Coinsnap payment gateway.
 
+Simply register on [Coinsnap](https://app.coinsnap.io/register), enter your own Lightning address and install the Coinsnap payment module in Pretix development environment. Add your store ID and your API key which you’ll find in your Coinsnap account, and your customers can pay you with Bitcoin Lightning right away!
 
 
 ## Features ##

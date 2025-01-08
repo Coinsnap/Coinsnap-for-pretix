@@ -76,16 +76,19 @@ The Coinsnap Pretix plugin allows you to accept Bitcoin Lightning payments in Pr
 
 ### 1. Coinsnap plugin installation
 
-Setup dev environment as described here https://docs.pretix.eu/en/latest/development/setup.html
+1.1. Setup dev environment as described [here](https://docs.pretix.eu/en/latest/development/setup.html)
 
-After successfully setting up dev environment copy coinsnap folder from our repo https://github.com/Coinsnap/Coinsnap-for-pretix  to src folder of Pretix.
+1.2. After successfully setting up dev environment copy coinsnap folder from our repo https://github.com/Coinsnap/Coinsnap-for-pretix  to src folder of Pretix.
 
-Run:
-3.1. Inside src/coinsnap folder pip3 install -e.
-3.2. Inside src folder of pretix
+1.3 Run:
+
+1.3.1. Inside src/coinsnap folder pip3 install -e.
+
+1.3.2. Inside src folder of pretix
 python manage.py makemigrations coinsnap
 python manage.py migrate
-3.3. Inside src folder
+
+1.3.3. Inside src folder
 python manage.py runserver
 
 
@@ -101,11 +104,23 @@ Default credentials are:
 
 2.2. Click on **Admin Mode** in upper right corner and create new Organizer under Organizers in navbar.
 
+![Admin Mode](https://resources.coinsnap.org/products/pretix/images/screenshot-1.png)
+
 2.3. Create new Event (every event can have its own payment gateways list).
 
-2.4. After creating event go to **Settings > Plugins** and enable **Coinsnap**.
+![Create new Event](https://resources.coinsnap.org/products/pretix/images/screenshot-2.png)
 
-2.5. Go to Settings > Payment > Settings next to Bitcoin-Lightning payment and click **Enable payment method** and at the bottom add **StoreID** and **Api Key** and ngrok domain as **Custom domain** if you are on localhost in order to make webhooks work.
+2.4. After creating event go to **Settings > Plugins > Payment providers** and enable **Coinsnap**.
+
+![Payment providers](https://resources.coinsnap.org/products/pretix/images/screenshot-3.png)
+
+2.5. Go to Settings > Payment > Settings
+
+![Payment gateways](https://resources.coinsnap.org/products/pretix/images/screenshot-4.png)
+
+2.6. Go to Bitcoin-Lightning payment and click **Enable payment method** and at the bottom add **StoreID** and **Api Key** and ngrok domain as **Custom domain** if you are on localhost in order to make webhooks work.
+
+![Payment Settings](https://resources.coinsnap.org/products/pretix/images/screenshot-5.png)
 
 
 ### 3. Create Coinsnap account ####

@@ -124,7 +124,7 @@ Default credentials are:
 
 2.6. Go to Bitcoin-Lightning payment and click **Enable payment method** and at the bottom add **StoreID** and **Api Key** and ngrok domain as **Custom domain** if you are on localhost in order to make webhooks work.
 
-![Payment Settings](https://resources.coinsnap.org/products/pretix/images/screenshot-5.png)
+
 
 ![Available plugins](https://resources.coinsnap.org/products/pretix/images/screenshot-6.png)
 

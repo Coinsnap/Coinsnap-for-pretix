@@ -9,7 +9,7 @@ import logging
 import secrets
 import string
 from decimal import Decimal
-from coinsnap.models import CoinsnapWebhookState, RefCoinsnapObject
+from coinsnap import store_webhooks
 from pretix.base.forms import SecretKeySettingsField
 from pretix.base.payment import BasePaymentProvider, PaymentException
 from pretix.base.models import OrderPayment
@@ -131,9 +131,9 @@ class CoinsnapPayment(BasePaymentProvider):
         base = f"{self.BASE_API_URL}/{store_id}/webhooks"
         url = self.webhook_url()
         try:
-            state = CoinsnapWebhookState.objects.filter(key=f"store:{store_id}").first()
-            webhook_id = state.webhook_id if state else None
-            if webhook_id and state.secret:
+            stored = store_webhooks.get(store_id)
+            webhook_id = stored.get("webhook_id")
+            if webhook_id and stored.get("secret"):
                 response = requests.get(f"{base}/{webhook_id}", headers=headers, timeout=15)
                 if response.status_code == 200 and response.json().get("url") == url:
                     return True
@@ -156,10 +156,7 @@ class CoinsnapPayment(BasePaymentProvider):
                 timeout=15,
             )
             response.raise_for_status()
-            CoinsnapWebhookState.objects.update_or_create(
-                key=f"store:{store_id}",
-                defaults={"secret": secret, "webhook_id": response.json().get("id"), "is_connected_to_webhook": True},
-            )
+            store_webhooks.save(store_id, secret, response.json().get("id"))
             logger.info("Coinsnap: webhook registered")
             return True
         except (requests.exceptions.RequestException, ValueError) as e:
@@ -194,17 +191,6 @@ class CoinsnapPayment(BasePaymentProvider):
             orderID=payment.order.full_code,
         )
 
-        existing_ref_obj = RefCoinsnapObject.objects.filter(
-            reference=payment.order.full_code
-        ).first()
-
-        if not existing_ref_obj:
-            existing_ref_obj = RefCoinsnapObject.objects.create(
-                order=payment.order, 
-                payment=payment, 
-                reference=payment.order.full_code
-            )
-            
         # The webhook finds the payment by this invoice id; no other invoice can confirm it.
         payment.info = json.dumps({
             'invoiceId': invoice['id'],

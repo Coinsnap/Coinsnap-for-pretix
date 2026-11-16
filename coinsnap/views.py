@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import time
 
 import requests
@@ -10,8 +11,7 @@ from django.views.decorators.http import require_POST
 from django_scopes import scope, scopes_disabled
 from pretix.base.models import OrderPayment, Quota
 
-from coinsnap import webhook
-from coinsnap.models import CoinsnapWebhookState, RefCoinsnapObject
+from coinsnap import store_webhooks, webhook
 
 logger = logging.getLogger(__name__)
 API_URL = "https://app.coinsnap.io/api/v1/stores"
@@ -83,22 +83,22 @@ def _candidates_for(invoice_id, data):
             .select_related("order", "order__event", "order__event__organizer")
         )
         if not payments:
-            # Payments created before 0.2.0 carry no invoice id; their order code is the only link.
+            # Payments created before 0.2.0 carry no invoice id; the order code in their info is the only link.
             metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
             order_code = metadata.get("orderId")
-            if isinstance(order_code, str) and order_code:
-                ref = RefCoinsnapObject.objects.filter(reference=order_code).select_related(
-                    "payment", "payment__order", "payment__order__event"
-                ).first()
-                if ref and ref.payment and ref.payment.provider == "coinsnap":
-                    payments = [ref.payment]
+            if isinstance(order_code, str) and re.match(r"^[A-Za-z0-9_-]{1,190}$", order_code):
+                payments = list(
+                    OrderPayment.objects.filter(
+                        provider="coinsnap",
+                        info__contains=f'"orderID": "{order_code}"',
+                        state__in=(OrderPayment.PAYMENT_STATE_CREATED, OrderPayment.PAYMENT_STATE_PENDING),
+                    ).select_related("order", "order__event", "order__event__organizer")
+                )
 
         candidates = []
-        legacy_secret = CoinsnapWebhookState.get_secret()
+        legacy_secret = store_webhooks.legacy_secret()
         for payment in payments:
-            store_id = payment.payment_provider.settings.get("store_id")
-            state = CoinsnapWebhookState.objects.filter(key=f"store:{store_id}").first()
-            store_secret = state.secret if state else None
+            store_secret = store_webhooks.get(payment.payment_provider.settings.get("store_id")).get("secret")
             for secret in {store_secret, legacy_secret} - {None, ""}:
                 candidates.append(_candidate(payment, secret))
         return candidates

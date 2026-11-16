@@ -71,6 +71,7 @@ def _candidate(payment, secret):
         "amount": str(payment.amount),
         "currency": payment.order.event.currency,
         "confirmed": payment.state == OrderPayment.PAYMENT_STATE_CONFIRMED,
+        "refunded": payment.state == OrderPayment.PAYMENT_STATE_REFUNDED,
         "fetch": _fetcher(settings),
         "confirm": _confirmer(payment),
     }
@@ -82,7 +83,9 @@ def _candidates_for(invoice_id, data):
             OrderPayment.objects.filter(provider="coinsnap", info__contains=f'"invoiceId": "{invoice_id}"')
             .select_related("order", "order__event", "order__event__organizer")
         )
+        legacy = False
         if not payments:
+            legacy = True
             # Payments created before 0.2.0 carry no invoice id; the order code in their info is the only link.
             metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
             order_code = metadata.get("orderId")
@@ -96,7 +99,8 @@ def _candidates_for(invoice_id, data):
                 )
 
         candidates = []
-        legacy_secret = store_webhooks.legacy_secret()
+        # The instance-wide secret of versions before 0.2.0 only counts for payments made with them.
+        legacy_secret = store_webhooks.legacy_secret() if legacy else None
         for payment in payments:
             store_secret = store_webhooks.get(payment.payment_provider.settings.get("store_id")).get("secret")
             for secret in {store_secret, legacy_secret} - {None, ""}:

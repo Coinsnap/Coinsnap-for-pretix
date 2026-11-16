@@ -141,6 +141,9 @@ def process(body, signature_header, candidates_for, log, now_seconds=None):
     if payment["confirmed"]:
         log("INFO", "already processed", invoice_id)
         return 200
+    if payment.get("refunded"):
+        log("INFO", "no change: payment refunded", invoice_id)
+        return 200
     payment["confirm"]()
     log("INFO", "paid", invoice_id)
     return 200

@@ -8,10 +8,12 @@ import json
 import logging
 import secrets
 import string
-import re
+from decimal import Decimal
 from coinsnap.models import CoinsnapWebhookState, RefCoinsnapObject
-from pretix.base.payment import BasePaymentProvider
+from pretix.base.forms import SecretKeySettingsField
+from pretix.base.payment import BasePaymentProvider, PaymentException
 from pretix.base.models import OrderPayment
+from pretix.helpers.urls import build_absolute_uri as build_global_uri
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +28,13 @@ class CoinsnapPayment(BasePaymentProvider):
     @property
     def settings_form_fields(self):
         fields = super().settings_form_fields
-        for setting in self.COINSNAP_SETTINGS:
-            fields[setting] = forms.CharField(
-                label=setting.replace("_", " ").title(),
-                required=True,
-                widget=forms.TextInput(attrs={"placeholder": f"Enter {setting}"}),
-            )
+        fields["store_id"] = forms.CharField(
+            label="Store Id",
+            required=True,
+            widget=forms.TextInput(attrs={"placeholder": "Enter store_id"}),
+        )
+        # Shown redacted; submitting the form unchanged keeps the stored key.
+        fields["api_key"] = SecretKeySettingsField(label="Api Key", required=True)
         return fields
 
     
@@ -57,57 +60,42 @@ class CoinsnapPayment(BasePaymentProvider):
     def payment_is_valid_session(self, request):
         return True
 
-    def create_coinsnap_invoice(self, request, total, currency, redirect, orderID):
-        """
-        Create an invoice with Coinsnap API.
-        
-        Args:
-            request: Django request object
-            total: Payment amount
-            currency: Payment currency
-            redirect: Redirect URL after payment
-            orderID: Unique order identifier
-        
-        Returns:
-            bool: Whether invoice creation was successful
-        """
-
+    def create_coinsnap_invoice(self, total, currency, redirect, orderID):
+        """Creates the invoice and returns the API's answer (id and checkoutLink)."""
         store_id, api_key = self.settings.get("store_id"), self.settings.get("api_key")
+        if not currency or not store_id or not api_key:
+            raise PaymentException(_("The payment could not be started. Please try again later."))
 
-        if not currency:
-            raise ValueError("Currency could not be determined from the cart.")
-
-        if not store_id or not api_key:
-            raise ValueError(
-                "Store ID and API Key must be configured in the plugin settings."
-            )
-        url = f"{self.BASE_API_URL}/{store_id}/invoices"
-        headers = {"x-api-key": api_key}
         payload = {
-            "amount": float(total),
+            "amount": str(Decimal(total).quantize(Decimal("0.01"))),
             "currency": currency,
             "orderId": orderID,
             "redirectUrl": redirect,
             "redirectAutomatically": True,
         }
         try:
-            response = requests.post(url, json=payload, headers=headers)
+            response = requests.post(
+                f"{self.BASE_API_URL}/{store_id}/invoices",
+                json=payload,
+                headers={"x-api-key": api_key},
+                timeout=30,
+            )
             response.raise_for_status()
             data = response.json()
-            logger.info(f"Invoice created with checkout link: {data.get('checkoutLink')}")
-            request.session["coinsnap_checkout_link"] = data.get("checkoutLink")
-            return True
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error creating Coinsnap invoice: {e}")
-            raise
+        except (requests.exceptions.RequestException, ValueError) as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            logger.error(f"Coinsnap: invoice creation failed for order {orderID} (status {status})")
+            raise PaymentException(_("The payment could not be started. Please try again later."))
+        if not data.get("id") or not data.get("checkoutLink"):
+            logger.error(f"Coinsnap: invoice creation for order {orderID} returned no invoice")
+            raise PaymentException(_("The payment could not be started. Please try again later."))
+        return data
 
     def checkout_prepare(self, request, cart):
         """
         Prepare checkout by checking webhook.
         """
-        domain = f'{request.scheme}://{request.get_host()}'
-        self.register_coinsnap_webhook(domain=domain)
+        self.register_coinsnap_webhook()
         return True
 
     def payment_form_render(self, request) -> str:
@@ -130,72 +118,54 @@ class CoinsnapPayment(BasePaymentProvider):
         }
         return template.render(ctx)
 
-    def register_coinsnap_webhook(self, force=False, domain=None):
-        """
-        Registers a webhook with Coinsnap to listen for payment events.
+    def webhook_url(self):
+        # From the configured site URL, never from the request's Host header.
+        return build_global_uri("plugins:coinsnap:coinsnap_webhook")
 
-        Args:
-            force: Force re-registration of webhook
-        
-        Returns:
-            bool: Whether webhook registration was successful
-
-        """
+    def register_coinsnap_webhook(self):
+        """Makes sure this event's store has our webhook and we hold its secret (one per store, shared by its events)."""
         store_id, api_key = self.settings.get("store_id"), self.settings.get("api_key")
-
-        CoinsnapWebhookState.objects.get_or_create(key='webhook_connection', defaults={'is_connected_to_webhook': False})
-        
-        if force:
-            CoinsnapWebhookState.set(False)
-
-        if CoinsnapWebhookState.get(): #If webhook is saved check if it is still valid and reset if not
-            webhook_id = CoinsnapWebhookState.get_webhook_id()
-            headers = {
-                "x-api-key": api_key,
-                "Content-Type": "application/json",
-            }
-            url = f'https://app.coinsnap.io/api/v1/stores/{store_id}/webhooks/{webhook_id}'
-            response = requests.get(
-                url,
-                headers=headers
-            )
-            if response.status_code == 200:
-                return True
-            else: 
-                CoinsnapWebhookState.set(False)
-        
-        characters = string.ascii_letters + string.digits
-        secret = ''.join(secrets.choice(characters) for _ in range(32))
-
-        url = f"{self.BASE_API_URL}/{store_id}/webhooks"
-        payload = {
-            "url": f'{domain}/pretix/webhooks/coinsnap',
-            "events": self.WEBHOOK_EVENTS,
-            "secret": secret,
-        }
-        headers = {
-            "x-api-key": api_key,
-            "Content-Type": "application/json",
-        }
-
-        try:
-            CoinsnapWebhookState.set_secret(secret)
-
-            response = requests.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            logger.info("Webhook registered successfully.")
-
-            CoinsnapWebhookState.set(True)
-
-            webhook_id = response.json().get('id')
-            CoinsnapWebhookState.set_webhook_id(webhook_id)
-
-            return True
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to register webhook: {e}")
-            CoinsnapWebhookState.set(False)
+        if not store_id or not api_key:
             return False
+        headers = {"x-api-key": api_key, "Content-Type": "application/json"}
+        base = f"{self.BASE_API_URL}/{store_id}/webhooks"
+        url = self.webhook_url()
+        try:
+            state = CoinsnapWebhookState.objects.filter(key=f"store:{store_id}").first()
+            webhook_id = state.webhook_id if state else None
+            if webhook_id and state.secret:
+                response = requests.get(f"{base}/{webhook_id}", headers=headers, timeout=15)
+                if response.status_code == 200 and response.json().get("url") == url:
+                    return True
+                if response.status_code not in (400, 404):
+                    # An outage is not a missing webhook; replacing it now would break a working secret.
+                    return False
 
+            # Webhooks of ours whose secret we no longer hold (older versions kept one secret for all stores).
+            existing = requests.get(base, headers=headers, timeout=15)
+            existing.raise_for_status()
+            for hook in existing.json() or []:
+                if hook.get("url") == url and hook.get("id"):
+                    requests.delete(f"{base}/{hook['id']}", headers=headers, timeout=15)
+
+            secret = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
+            response = requests.post(
+                base,
+                json={"url": url, "events": self.WEBHOOK_EVENTS, "secret": secret},
+                headers=headers,
+                timeout=15,
+            )
+            response.raise_for_status()
+            CoinsnapWebhookState.objects.update_or_create(
+                key=f"store:{store_id}",
+                defaults={"secret": secret, "webhook_id": response.json().get("id"), "is_connected_to_webhook": True},
+            )
+            logger.info("Coinsnap: webhook registered")
+            return True
+        except (requests.exceptions.RequestException, ValueError) as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            logger.error(f"Coinsnap: webhook could not be registered (status {status})")
+            return False
 
     def execute_payment(self, request: HttpRequest, payment: OrderPayment):
         """
@@ -217,8 +187,7 @@ class CoinsnapPayment(BasePaymentProvider):
             )
         )
 
-        self.create_coinsnap_invoice(
-            request,
+        invoice = self.create_coinsnap_invoice(
             payment.amount,
             self.event.currency,
             redirect=redirect_url,
@@ -236,12 +205,14 @@ class CoinsnapPayment(BasePaymentProvider):
                 reference=payment.order.full_code
             )
             
+        # The webhook finds the payment by this invoice id; no other invoice can confirm it.
         payment.info = json.dumps({
-            'amount' : float(payment.amount),
+            'invoiceId': invoice['id'],
+            'amount': str(payment.amount),
             'currency': self.event.currency,
             'redirect': redirect_url,
             'orderID': payment.order.full_code
         })
 
         payment.save(update_fields=["info"])
-        return request.session["coinsnap_checkout_link"]
+        return invoice['checkoutLink']

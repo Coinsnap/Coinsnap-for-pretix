@@ -1,4 +1,3 @@
-from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django.http import HttpRequest
 from django import forms
@@ -14,6 +13,7 @@ from pretix.base.forms import SecretKeySettingsField
 from pretix.base.payment import BasePaymentProvider, PaymentException
 from pretix.base.models import OrderPayment
 from pretix.helpers.urls import build_absolute_uri as build_global_uri
+from pretix.multidomain.urlreverse import build_absolute_uri as build_event_uri
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +45,8 @@ class CoinsnapPayment(BasePaymentProvider):
 
         cleaned_data = super().settings_form_clean(cleaned_data)
 
-        store_id = cleaned_data.get("payment_coinsnap_store_id")
-        api_key = cleaned_data.get("payment_coinsnap_api_key")
+        store_id = cleaned_data.get("payment_coinsnap_store_id") or ""
+        api_key = cleaned_data.get("payment_coinsnap_api_key") or ""
         if len(store_id) <= 0:
             raise forms.ValidationError("Store ID must not be empty!")
         if len(api_key) <= 0:
@@ -95,6 +95,8 @@ class CoinsnapPayment(BasePaymentProvider):
         """
         Prepare checkout by checking webhook.
         """
+        # Starts the one-day window for payments made before this version (see views._candidates_for).
+        store_webhooks.upgraded_at()
         self.register_coinsnap_webhook()
         return True
 
@@ -103,7 +105,8 @@ class CoinsnapPayment(BasePaymentProvider):
         Render payment form template.
         """
         template = get_template("coinsnap/checkout_payment_form.html")
-        ctx = {"request": request, "event": self.event, "settings": self.settings}
+        # No settings in the context: they hold the API key.
+        ctx = {"request": request, "event": self.event}
         return template.render(ctx)
 
     def checkout_confirm_render(self, request) -> str:
@@ -114,7 +117,6 @@ class CoinsnapPayment(BasePaymentProvider):
         ctx = {
             "request": request,
             "event": self.event,
-            "settings": self.settings,
         }
         return template.render(ctx)
 
@@ -171,19 +173,14 @@ class CoinsnapPayment(BasePaymentProvider):
         Returns:
             str: Coinsnap checkout link
         """
-        # Construct the full redirect URL
-        redirect_url = request.build_absolute_uri(
-            reverse(
-                "presale:event.order",
-                kwargs={
-                    "event": self.event.slug,
-                    "organizer": self.event.organizer.slug,
-                    "order": payment.order.code,
-                    "secret": payment.order.secret,
-                },
-            )
+        # From the event's configured domain, not the request's Host header. The order page only shows the status.
+        redirect_url = build_event_uri(
+            self.event,
+            "presale:event.order",
+            kwargs={"order": payment.order.code, "secret": payment.order.secret},
         )
 
+        store_webhooks.upgraded_at()
         invoice = self.create_coinsnap_invoice(
             payment.amount,
             self.event.currency,
@@ -191,9 +188,19 @@ class CoinsnapPayment(BasePaymentProvider):
             orderID=payment.order.full_code,
         )
 
-        # The webhook finds the payment by this invoice id; no other invoice can confirm it.
+        # The webhook finds the payment by these invoice ids; no other invoice can confirm it. Every invoice is kept:
+        # reopening the payment link creates a new one, and the customer may still pay an earlier one.
+        try:
+            info = json.loads(payment.info or "{}")
+        except ValueError:
+            info = {}
+        if not isinstance(info, dict):
+            info = {}
+        records = store_webhooks.invoice_records(info)
+        records.append({"id": invoice["id"], "amount": str(payment.amount), "currency": self.event.currency})
         payment.info = json.dumps({
             'invoiceId': invoice['id'],
+            'invoices': records,
             'amount': str(payment.amount),
             'currency': self.event.currency,
             'redirect': redirect_url,

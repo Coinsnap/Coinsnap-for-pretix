@@ -59,7 +59,10 @@ def to_minor_units(value):
 def decide(invoice, expected_amount, expected_currency):
     status = str(invoice.get("status") or "")
     if status == "Settled":
-        paid = to_minor_units(invoice.get("invoiceAmount", invoice.get("fiatAmount")))
+        paid = invoice.get("invoiceAmount")
+        if paid in (None, ""):
+            paid = invoice.get("fiatAmount")
+        paid = to_minor_units(paid) if paid not in (None, "") else None
         expected = to_minor_units(expected_amount)
         same_currency = str(invoice.get("currency") or "").upper() == str(expected_currency).upper()
         # One unit of the 8th decimal covers rounding for BTC; a cent otherwise.
@@ -82,40 +85,51 @@ def invoice_id_from_body(body):
     return invoice_id, data
 
 
-def process(body, signature_header, candidates_for, log, now_seconds=None):
+LEGACY = "legacy"
+
+
+def verified_source(header, body, secrets, now_seconds):
+    """(source, None) for the first (source, secret) pair whose secret signed the body, else (None, problem)."""
+    problem = "bad signature"
+    for source, secret in secrets:
+        found = signature_problem(header, body, secret, now_seconds)
+        if found is None:
+            return source, None
+        if found == "stale timestamp":
+            problem = found
+    return None, problem
+
+
+def process(body, signature_header, secrets, candidates_for, log, now_seconds=None):
     """Returns the HTTP status for the reply.
 
-    candidates_for(invoice_id, data) gives the payments this webhook may be about, each a dict with
-    secret, order_code, invoice_id (recorded at checkout, None for older payments), amount, currency,
-    confirmed, fetch(invoice_id) -> invoice dict (raises ApiError) and confirm().
+    secrets() gives (source, secret) pairs: one per Coinsnap store we registered a webhook on (source = that
+    store), plus LEGACY for the one secret versions before 0.2.0 shared between all stores. The signature is
+    checked against them before the body is read.
+
+    candidates_for(invoice_id, data, source) gives the payments this webhook may be about, each a dict with
+    order_code, amount, currency (what that invoice asked for), fetch(invoice_id) -> invoice dict (raises
+    ApiError) and confirm() -> "paid" or the reason nothing changed.
     """
     now_seconds = int(time.time()) if now_seconds is None else now_seconds
+    source, problem = verified_source(signature_header, body, secrets(), now_seconds)
+    if source is None:
+        log("SECURITY", problem, "")
+        return 401
+
     invoice_id, data = invoice_id_from_body(body)
     if not invoice_id:
         return 200
 
-    candidates = candidates_for(invoice_id, data)
+    candidates = candidates_for(invoice_id, data, source)
     if not candidates:
         # The dashboard's "Send test webhook" button lands here.
         log("INFO", "not ours", invoice_id)
         return 200
-    # Each event has its own secret; the one that verifies is the payment this webhook is for.
-    payment = None
-    problem = "bad signature"
-    for candidate in candidates:
-        problem = signature_problem(signature_header, body, candidate["secret"], now_seconds)
-        if problem is None:
-            payment = candidate
-            break
-    if payment is None:
-        log("SECURITY", problem, invoice_id)
-        return 401
 
-    if payment["invoice_id"] and payment["invoice_id"] != invoice_id:
-        log("SECURITY", "invoice not created for this payment", invoice_id)
-        return 200
+    # All candidates belong to one order of one event, so one store answers for them.
     try:
-        invoice = payment["fetch"](invoice_id)
+        invoice = candidates[0]["fetch"](invoice_id)
     except ApiError as e:
         if e.status in (400, 404):
             log("INFO", "unknown invoice", invoice_id)
@@ -125,25 +139,25 @@ def process(body, signature_header, candidates_for, log, now_seconds=None):
     except Exception:
         log("INFO", "retry: API unavailable", invoice_id)
         return 503
+    if not isinstance(invoice, dict):
+        log("INFO", "retry: API unavailable", invoice_id)
+        return 503
 
-    if str(invoice.get("orderId") or "") != payment["order_code"]:
-        log("SECURITY", "invoice of another order", invoice_id)
-        return 200
-
-    decision = decide(invoice, payment["amount"], payment["currency"])
     claims_paid = data.get("type") == "Settled"
-    if decision != PAID and (claims_paid or decision == MISMATCH):
-        log("SECURITY", "forged status" if claims_paid else "amount mismatch", invoice_id)
+    candidates = [c for c in candidates if str(invoice.get("orderId") or "") == c["order_code"]]
+    if not candidates:
+        log("SECURITY" if claims_paid else "INFO", "invoice of another order", invoice_id)
         return 200
-    if decision != PAID:
-        log("INFO", "no change", invoice_id)
+
+    decisions = [(decide(invoice, c["amount"], c["currency"]), c) for c in candidates]
+    payment = next((c for d, c in decisions if d == PAID), None)
+    if payment is None:
+        mismatch = any(d == MISMATCH for d, _ in decisions)
+        if claims_paid or mismatch:
+            log("SECURITY", "forged status" if claims_paid else "amount mismatch", invoice_id)
+        else:
+            log("INFO", f"status {decisions[0][0]}", invoice_id)
         return 200
-    if payment["confirmed"]:
-        log("INFO", "already processed", invoice_id)
-        return 200
-    if payment.get("refunded"):
-        log("INFO", "no change: payment refunded", invoice_id)
-        return 200
-    payment["confirm"]()
-    log("INFO", "paid", invoice_id)
+
+    log("INFO", payment["confirm"](), invoice_id)
     return 200

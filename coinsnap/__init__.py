@@ -1,4 +1,4 @@
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from django.utils.translation import gettext_lazy as _
 from pretix.base.plugins import PluginConfig

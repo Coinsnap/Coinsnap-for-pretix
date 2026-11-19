@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Feature: Coinsnap invoices carry the order code, event, tickets (with attendees), fees, the invoice address and the buyer email, so the merchant sees in Coinsnap what was paid and by whom.
+
 ## 0.2.0
 
 - Security: The webhook no longer confirms payments from what the request says. It verifies the timestamped `X-Coinsnap-Signature` header with a timing-safe comparison, then asks the Coinsnap API about the invoice. A payment is confirmed only when the invoice is settled, belongs to that order, and matches the payment's amount and currency; and only once.

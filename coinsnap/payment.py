@@ -18,6 +18,128 @@ from pretix.multidomain.urlreverse import build_absolute_uri as build_event_uri
 logger = logging.getLogger(__name__)
 
 
+def _text(value):
+    """Plain string for metadata; '' for None. Translated pretix strings give the current language."""
+    return "" if value is None else str(value).strip()
+
+
+def _money(value):
+    return str(Decimal(value).quantize(Decimal("0.01")))
+
+
+def _set(data, key, value):
+    """Adds a key only when it has a value, so no empty strings or nulls are sent."""
+    if isinstance(value, str):
+        value = value.strip()
+    if value not in (None, "", [], {}):
+        data[key] = value
+
+
+def _plugin_version():
+    try:
+        from coinsnap.apps import PluginApp
+
+        return PluginApp.PretixPluginMeta.version
+    except Exception:
+        return ""
+
+
+def invoice_metadata(order, payment):
+    """Everything about the order Coinsnap can show the merchant. The plugin has no customer-data setting,
+    so buyer data is always sent. orderId is the top-level field (the webhook matches on it), not set here."""
+    event = order.event
+    meta = {}
+    _set(meta, "orderNumber", order.code)
+    try:
+        _set(meta, "orderUrl", build_global_uri(
+            "control:event.order",
+            kwargs={"organizer": event.organizer.slug, "event": event.slug, "code": order.code},
+        ))
+    except Exception:
+        pass
+    _set(meta, "platform", "pretix")
+    _set(meta, "pluginVersion", _plugin_version())
+    _set(meta, "eventName", _text(event.name))
+    _set(meta, "eventSlug", event.slug)
+    _set(meta, "organizerName", _text(event.organizer.name))
+    _set(meta, "organizerSlug", event.organizer.slug)
+    if event.date_from:
+        _set(meta, "eventDate", event.date_from.isoformat())
+    _set(meta, "paymentId", payment.full_id)
+    _set(meta, "orderTotal", _money(order.total))
+    _set(meta, "language", order.locale)
+
+    positions = list(order.positions.select_related("item", "variation", "subevent").order_by("positionid"))
+    fees = list(order.fees.all())
+
+    # Buyer: the invoice address if one was entered, else the first attendee name; the order email.
+    try:
+        address = order.invoice_address
+    except Exception:
+        address = None
+    attendee_names = [_text(p.attendee_name) for p in positions if _text(p.attendee_name)]
+    name = _text(getattr(address, "name", "")) if address else ""
+    customer_name = name or (attendee_names[0] if attendee_names else "") or (_text(address.company) if address else "")
+    _set(meta, "customerName", customer_name)
+    _set(meta, "buyerName", customer_name)
+    _set(meta, "buyerEmail", order.email)
+    _set(meta, "buyerPhone", _text(getattr(order, "phone", None)))
+    if address:
+        _set(meta, "buyerCompany", _text(address.company))
+        street = [line.strip() for line in _text(address.street).splitlines() if line.strip()]
+        _set(meta, "buyerAddress1", street[0] if street else "")
+        _set(meta, "buyerAddress2", ", ".join(street[1:]))
+        _set(meta, "buyerZip", _text(address.zipcode))
+        _set(meta, "buyerCity", _text(address.city))
+        _set(meta, "buyerState", _text(getattr(address, "state", "")))
+        _set(meta, "buyerCountry", _text(getattr(address.country, "code", address.country)))
+        _set(meta, "buyerVatId", _text(getattr(address, "vat_id", "")))
+
+    # Line items: positions with the same product, variation and price grouped.
+    line_items, index = [], {}
+    position_list = []
+    for p in positions:
+        item_name = _text(p.item.name) if p.item else ""
+        variation = _text(p.variation.value) if p.variation else ""
+        label = f"{item_name} - {variation}" if variation else item_name
+        key = (p.item_id, p.variation_id, str(p.price), p.subevent_id)
+        if key not in index:
+            entry = {"name": label, "quantity": 0, "price": _money(p.price), "total": "0.00"}
+            _set(entry, "productId", str(p.item_id) if p.item_id else "")
+            _set(entry, "variationId", str(p.variation_id) if p.variation_id else "")
+            if p.subevent:
+                _set(entry, "subevent", _text(p.subevent.name))
+            index[key] = entry
+            line_items.append(entry)
+        entry = index[key]
+        entry["quantity"] += 1
+        entry["total"] = _money(Decimal(entry["total"]) + p.price)
+
+        position = {"positionId": p.positionid, "item": label, "price": _money(p.price)}
+        _set(position, "attendeeName", _text(p.attendee_name))
+        _set(position, "attendeeEmail", _text(p.attendee_email))
+        if p.addon_to_id:
+            _set(position, "addonTo", getattr(p.addon_to, "positionid", None))
+        if p.subevent:
+            _set(position, "subevent", _text(p.subevent.name))
+            if p.subevent.date_from:
+                _set(position, "subeventDate", p.subevent.date_from.isoformat())
+        position_list.append(position)
+    for f in fees:
+        line_items.append({"name": _text(f.get_fee_type_display()) or _text(f.fee_type), "quantity": 1,
+                           "price": _money(f.value), "total": _money(f.value), "feeType": _text(f.fee_type)})
+    _set(meta, "lineItems", line_items)
+    _set(meta, "positions", position_list)
+    tax = sum((p.tax_value or Decimal("0")) for p in positions) + sum((f.tax_value or Decimal("0")) for f in fees)
+    if tax:
+        _set(meta, "taxTotal", _money(tax))
+
+    summary = ", ".join(f"{e['quantity']}x {e['name']}" for e in line_items if "feeType" not in e)
+    desc = f"{_text(event.name)}: {summary}" if summary else _text(event.name)
+    _set(meta, "itemDesc", desc if len(desc) <= 250 else desc[:247] + "...")
+    return meta
+
+
 class CoinsnapPayment(BasePaymentProvider):
     identifier = "coinsnap"
     verbose_name = _("Bitcoin-Lightning payment")
@@ -60,7 +182,7 @@ class CoinsnapPayment(BasePaymentProvider):
     def payment_is_valid_session(self, request):
         return True
 
-    def create_coinsnap_invoice(self, total, currency, redirect, orderID):
+    def create_coinsnap_invoice(self, total, currency, redirect, orderID, metadata=None, buyer_email=None):
         """Creates the invoice and returns the API's answer (id and checkoutLink)."""
         store_id, api_key = self.settings.get("store_id"), self.settings.get("api_key")
         if not currency or not store_id or not api_key:
@@ -73,6 +195,11 @@ class CoinsnapPayment(BasePaymentProvider):
             "redirectUrl": redirect,
             "redirectAutomatically": True,
         }
+        if buyer_email:
+            payload["buyerEmail"] = buyer_email
+        if metadata:
+            # orderId stays the top-level value: the webhook matches the invoice's orderId to the order.
+            payload["metadata"] = {**metadata, "orderId": orderID}
         try:
             response = requests.post(
                 f"{self.BASE_API_URL}/{store_id}/invoices",
@@ -181,11 +308,20 @@ class CoinsnapPayment(BasePaymentProvider):
         )
 
         store_webhooks.upgraded_at()
+        try:
+            metadata = invoice_metadata(payment.order, payment)
+        except Exception as e:
+            # Extra order details must never stop the payment; the webhook only needs orderId.
+            # Only the error type is logged: the message could contain buyer data.
+            logger.error(f"Coinsnap: order details for order {payment.order.full_code} could not be read ({type(e).__name__})")
+            metadata = {"orderNumber": payment.order.code}
         invoice = self.create_coinsnap_invoice(
             payment.amount,
             self.event.currency,
             redirect=redirect_url,
             orderID=payment.order.full_code,
+            metadata=metadata,
+            buyer_email=payment.order.email or None,
         )
 
         # The webhook finds the payment by these invoice ids; no other invoice can confirm it. Every invoice is kept:

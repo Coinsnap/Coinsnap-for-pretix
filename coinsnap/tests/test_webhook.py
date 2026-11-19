@@ -526,3 +526,75 @@ def test_signature_rules():
     assert webhook.signature_problem(sign(body, "", t), body, "", t) == "bad signature"
     assert webhook.signature_problem(sign(body, "s", t - 301), body, "s", t) == "stale timestamp"
     assert webhook.signature_problem("sha256=abc", body, "s", t) == "bad signature"
+
+
+# --- Invoice request: orderId and order metadata -----------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_invoice_request_carries_order_id_and_order_metadata(shop, api, caplog):
+    from pretix.base.models import InvoiceAddress, Item, ItemVariation, OrderFee
+
+    event, payment = shop
+    caplog.set_level(logging.DEBUG)
+    with scope(organizer=event.organizer):
+        event.name = "Demo Conference"
+        event.save()
+        ticket = Item.objects.create(event=event, name="Ticket", default_price=Decimal("5.00"))
+        shirt = Item.objects.create(event=event, name="T-Shirt", default_price=Decimal("3.37"))
+        size = ItemVariation.objects.create(item=shirt, value="XL")
+        order = payment.order
+        order.locale = "en"
+        order.save()
+        order.positions.create(item=ticket, price=Decimal("5.00"), positionid=1, attendee_name_parts={"_legacy": "Ann Attendee"},
+                               attendee_email="ann@example.org")
+        order.positions.create(item=ticket, price=Decimal("5.00"), positionid=2, attendee_name_parts={"_legacy": "Bob Attendee"})
+        order.positions.create(item=shirt, variation=size, price=Decimal("3.37"), positionid=3)
+        OrderFee.objects.create(order=order, fee_type=OrderFee.FEE_TYPE_SERVICE, value=Decimal("0.00"))
+        InvoiceAddress.objects.create(order=order, name_parts={"_legacy": "Jane Buyer"}, company="ACME",
+                                      street="Main St 1\nBuilding B", zipcode="10115", city="Berlin", country="DE")
+        CoinsnapPayment(event).execute_payment(RequestFactory().get("/"), payment)
+
+    url, sent = api.posted[0]
+    # The webhook matches the invoice's orderId to order.full_code: unchanged.
+    assert sent["orderId"] == "DUMMY-ABCDE"
+    assert sent["buyerEmail"] == "buyer@example.org"
+    m = sent["metadata"]
+    assert m["orderId"] == "DUMMY-ABCDE"
+    assert m["orderNumber"] == "ABCDE"
+    assert m["orderUrl"].endswith("/control/event/dummy/dummy/orders/ABCDE/")
+    assert m["eventName"] == "Demo Conference" and m["eventSlug"] == "dummy"
+    assert m["platform"] == "pretix" and m["pluginVersion"]
+    assert m["customerName"] == "Jane Buyer" and m["buyerName"] == "Jane Buyer"
+    assert m["buyerEmail"] == "buyer@example.org"
+    assert m["buyerAddress1"] == "Main St 1" and m["buyerAddress2"] == "Building B"
+    assert m["buyerZip"] == "10115" and m["buyerCity"] == "Berlin" and m["buyerCountry"] == "DE"
+    assert m["buyerCompany"] == "ACME"
+    assert m["itemDesc"] == "Demo Conference: 2x Ticket, 1x T-Shirt - XL"
+    items = [i for i in m["lineItems"] if "feeType" not in i]
+    assert items[0] == {"name": "Ticket", "quantity": 2, "price": "5.00", "total": "10.00", "productId": str(ticket.pk)}
+    assert items[1]["name"] == "T-Shirt - XL" and items[1]["quantity"] == 1 and items[1]["variationId"] == str(size.pk)
+    assert [p["attendeeName"] for p in m["positions"] if "attendeeName" in p] == ["Ann Attendee", "Bob Attendee"]
+    assert m["positions"][0]["attendeeEmail"] == "ann@example.org"
+    assert m["orderTotal"] == "13.37" and m["language"] == "en"
+    # Empty values are left out, not sent as "" or null.
+    assert all(v not in ("", None) for v in m.values())
+    assert "buyerState" not in m and "buyerPhone" not in m
+    # The invoice still confirms the payment (matching unchanged), and buyer data stays out of the logs.
+    api.invoices[(STORE_A, "inv1")] = settled(event, "ABCDE")
+    body = body_for("inv1")
+    assert post(body, sign(body, SECRET_A)).status_code == 200
+    assert state(payment)[0] == OrderPayment.PAYMENT_STATE_CONFIRMED
+    for secret_value in ("Jane Buyer", "buyer@example.org", "Main St 1", "Ann Attendee"):
+        assert secret_value not in caplog.text
+
+
+@pytest.mark.django_db
+def test_invoice_request_without_address_or_positions(shop, api):
+    event, payment = shop
+    with scope(organizer=event.organizer):
+        CoinsnapPayment(event).execute_payment(RequestFactory().get("/"), payment)
+    url, sent = api.posted[0]
+    m = sent["metadata"]
+    assert sent["orderId"] == m["orderId"] == "DUMMY-ABCDE" and m["orderNumber"] == "ABCDE"
+    assert "customerName" not in m and "buyerAddress1" not in m and "lineItems" not in m
+    assert m["itemDesc"] == "dummy"
